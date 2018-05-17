@@ -1,7 +1,7 @@
 {
-  "name": "ethereumjs-tx",
+  "name": "ethereumjs-tx-pkcs11",
   "version": "1.3.3",
-  "description": "An simple module for creating, manipulating and signing ethereum transactions",
+  "description": "An simple module for creating, manipulating and signing ethereum transactions using PKCS11 crypto token",
   "main": "es5/index.js",
   "scripts": {
     "coverage": "istanbul cover ./test/index.js",
@@ -42,17 +42,18 @@
     "karma-firefox-launcher": "^1.0.0",
     "karma-tap": "^2.0.1",
     "minimist": "^1.2.0",
+    "pkcs11js": "^1.0.15",
     "standard": "^7.1.2",
     "tape": "^4.0.3"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ethereumjs/ethereumjs-tx.git"
+    "url": "https://github.com/suenchunhui/ethereumjs-tx-pkcs11"
   },
   "bugs": {
-    "url": "https://github.com/ethereumjs/ethereumjs-tx/issues"
+    "url": "https://github.com/suenchunhui/ethereumjs-tx-pkcs11/issues"
   },
-  "homepage": "https://github.com/ethereumjs/ethereumjs-tx",
+  "homepage": "https://github.com/suenchunhui/ethereumjs-tx-pkcs11",
   "standard": {
     "ignore": [
       "es5/**",
@@ -160,6 +161,14 @@
       "additions": 268,
       "deletions": 53,
       "hireable": null
-    }
+    },
+    {
+      "name": "Suen Chun Hui",
+      "email": "c@kommerce.com",
+      "url": "https://github.com/suenchunhui",
+      "contributions": 1,
+      "additions": 1,
+      "hireable": null
+    }    
   ]
 }

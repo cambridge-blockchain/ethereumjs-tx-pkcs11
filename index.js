@@ -1,7 +1,9 @@
 'use strict'
 const ethUtil = require('ethereumjs-util')
+const pkcs11js = require("pkcs11js");
 const fees = require('ethereum-common/params.json')
 const BN = ethUtil.BN
+const retry_limit = 5;
 
 // secp256k1n/2
 const N_DIV_2 = new BN('7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0', 16)
@@ -235,6 +237,206 @@ class Transaction {
       sig.v += this._chainId * 2 + 8
     }
     Object.assign(this, sig)
+  }
+
+
+  randomLabel() {
+      var text = "";
+      const length = 16;
+      var possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      for(var i = 0; i < length; i++) {
+          text += possible.charAt(Math.floor(Math.random() * possible.length));
+      }
+      return text;
+  }
+  /**
+   * Create a key pair stored on HSM via PKCS11
+   * @param {String} pin user-pin of PKCS11 token
+   * @param {String} pkcsLibPath path to PKCS11 library SO file
+   * @param {integer} slotIndex  card slot index to use (defaults to first one)
+   */
+  generatePKCS11Key(pkcsLibPath, pin, slotIndex = 0) {
+    //init PKCS11
+    var pkcs11 = new pkcs11js.PKCS11();
+    pkcs11.load(pkcsLibPath);     
+    pkcs11.C_Initialize();
+     
+    try {
+        // Getting list of slots
+        var slots = pkcs11.C_GetSlotList(true);
+        var slot = slots[slotIndex];
+        
+        //start session
+        var session = pkcs11.C_OpenSession(slot, pkcs11js.CKF_RW_SESSION | pkcs11js.CKF_SERIAL_SESSION);
+        pkcs11.C_Login(session, pkcs11js.CKU_USER, pin);  //TODO hardcoded to user type
+
+        //generate key
+        var key_label = this.randomLabel();
+        var pub_label = key_label + "_PUB";
+        var priv_label = key_label + "_PRI";
+        var publicKeyTemplate = [
+            { type: pkcs11js.CKA_CLASS, value: pkcs11js.CKO_PUBLIC_KEY },
+            { type: pkcs11js.CKA_TOKEN, value: true },  //persistent key
+            { type: pkcs11js.CKA_LABEL, value: pub_label },
+            { type: pkcs11js.CKA_EC_PARAMS, value: new Buffer("06052b8104000a", "hex") }, // secp256k1(AKA P-256)
+        ];
+        var privateKeyTemplate = [
+            { type: pkcs11js.CKA_CLASS, value: pkcs11js.CKO_PRIVATE_KEY },
+            { type: pkcs11js.CKA_TOKEN, value: true },  //persistent key
+            { type: pkcs11js.CKA_LABEL, value: priv_label },
+            { type: pkcs11js.CKA_SIGN, value: true },
+            { type: pkcs11js.CKA_DERIVE, value: true },
+        ];
+        var keys = pkcs11.C_GenerateKeyPair(
+          session, 
+          { mechanism: pkcs11js.CKM_EC_KEY_PAIR_GEN }, 
+          publicKeyTemplate, privateKeyTemplate);
+
+        pkcs11.C_Logout(session);
+        pkcs11.C_CloseSession(session);
+        return {public: pub_label, private: priv_label};
+    }
+    catch(e){
+        console.error(e);
+    }
+    finally {
+        pkcs11.C_Finalize();
+    }
+  }
+
+
+
+  /**
+   * get raw public key component via PKCS11 key handle
+   * @param {String}  pkcsLibPath path to PKCS11 library SO file
+   * @param {String} pin user-pin of PKCS11 token
+   * @param {String}  key_label prefix of key pair token label created from generatePKCS11Key()
+   * @param {integer} slotIndex  card slot index to use (defaults to first one)
+   */
+  getPublicKeyPKCS11 (pkcsLibPath, pin, key_label, slotIndex = 0) {
+    var pkcs11 = new pkcs11js.PKCS11();
+    pkcs11.load(pkcsLibPath);     
+    pkcs11.C_Initialize();
+     
+    try {
+        // Getting list of slots
+        var slots = pkcs11.C_GetSlotList(true);
+        var slot = slots[slotIndex];
+        
+        //start session
+        var session = pkcs11.C_OpenSession(slot, pkcs11js.CKF_RW_SESSION | pkcs11js.CKF_SERIAL_SESSION);
+     
+        // Getting info about Session
+        pkcs11.C_Login(session, pkcs11js.CKU_USER, pin);  //TODO hardcoded to user type
+
+        //find key
+        pkcs11.C_FindObjectsInit(session, 
+          [
+            { type: pkcs11js.CKA_LABEL, value: key_label },
+            { type: pkcs11js.CKA_CLASS, value: pkcs11js.CKO_PUBLIC_KEY }
+          ]);
+
+        var publicKey = pkcs11.C_FindObjects(session);
+        pkcs11.C_FindObjectsFinal(session);
+        if (publicKey == null) {
+          //FIXME assert key found
+          throw "Key not found";
+        }
+
+        var ecpoint = pkcs11.C_GetAttributeValue(session, publicKey, [{type: pkcs11js.CKA_EC_POINT}]);
+        var ecdata = ecpoint[0].value;
+        var prefix = "02";
+        if (ecdata[66] % 2 == 1)
+          prefix = "03";
+
+        pkcs11.C_Logout(session);
+        pkcs11.C_CloseSession(session);
+
+        return new Buffer(prefix + ecdata.slice(3,35).toString('hex'),'hex');
+    }
+    catch(e){
+        console.error(e);
+    }
+    finally {
+        pkcs11.C_Finalize();
+    }
+  }
+
+  /**
+   * sign a transaction with a private key on HSM via PKCS11
+   * @param {String}  pkcsLibPath path to PKCS11 library SO file
+   * @param {String} pin user-pin of PKCS11 token
+   * @param {String}  key_label prefix of key pair token label created from generatePKCS11Key()
+   * @param {integer} slotIndex  card slot index to use (defaults to first one)
+   */
+  signWithPKCS11 (pkcsLibPath, pin, key_label, slotIndex = 0) {
+
+    var pkcs11 = new pkcs11js.PKCS11();
+    pkcs11.load(pkcsLibPath);     
+    pkcs11.C_Initialize();
+     
+    try {
+        // Getting list of slots
+        var slots = pkcs11.C_GetSlotList(true);
+        var slot = slots[slotIndex];
+        
+        //start session
+        var session = pkcs11.C_OpenSession(slot, pkcs11js.CKF_RW_SESSION | pkcs11js.CKF_SERIAL_SESSION);
+     
+        // Login
+        pkcs11.C_Login(session, pkcs11js.CKU_USER, pin);  //FIXME hardcoded to user type
+
+        //find key
+        pkcs11.C_FindObjectsInit(session, [{ type: pkcs11js.CKA_LABEL, value: key_label }]);
+
+        var privateKey = pkcs11.C_FindObjects(session);
+        pkcs11.C_FindObjectsFinal(session);
+
+        //hashing
+        const msgHash = this.hash(false)
+
+        //signing
+        var sigVerified = false;
+        //retry signature generation in case s-value is greater than secp256k1n/2
+        for(var retry=0; retry < retry_limit; retry++){ 
+          pkcs11.C_SignInit(session, { mechanism: pkcs11js.CKM_ECDSA }, privateKey);     
+          var pkcs_sig = pkcs11.C_Sign(session, msgHash, Buffer(256));
+          var sig = {r: pkcs_sig.slice(0,32), s:pkcs_sig.slice(32,64)};
+          
+          sig.v = 27;
+          if (this._chainId > 0) {
+            sig.v += this._chainId * 2 + 8
+          }
+
+          //recid is range from 0..3
+          //FIXME are we able to calculate this from public key only?
+          for(var recid=0; recid<4; recid++){
+            Object.assign(this, sig);
+            if(this.verifySignature()) {
+              sigVerified = true;
+              break;
+            }
+            sig.v++;
+          }
+
+          if(sigVerified){
+            break;
+          }
+        }
+
+        if(!sigVerified){
+          throw "Unable to create valid signature (within "+retry_limit+" retries)";
+        }
+
+        pkcs11.C_Logout(session);
+        pkcs11.C_CloseSession(session);
+    }
+    catch(e){
+        console.error(e);
+    }
+    finally {
+        pkcs11.C_Finalize();
+    }
   }
 
   /**
