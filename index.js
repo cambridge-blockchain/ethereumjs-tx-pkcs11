@@ -357,23 +357,6 @@ class Transaction {
 
         results = this._getPublicKeyPKCS11 (pkcs11, session, key_label);
         
-        var publicKey = pkcs11.C_FindObjects(session);
-        pkcs11.C_FindObjectsFinal(session);
-        if (publicKey == null) {
-          //FIXME assert key found
-          throw "Key not found";
-        }
-
-        var ecpoint = pkcs11.C_GetAttributeValue(session, publicKey, [{type: pkcs11js.CKA_EC_POINT}]);
-        var ecdata = ecpoint[0].value;
-        var prefix = "02";
-        if (ecdata[66] % 2 == 1)
-          prefix = "03";
-
-        pkcs11.C_Logout(session);
-        pkcs11.C_CloseSession(session);
-
-        return new Buffer(prefix + ecdata.slice(3,35).toString('hex'),'hex');
     }
     catch(e){
         console.error(e);
