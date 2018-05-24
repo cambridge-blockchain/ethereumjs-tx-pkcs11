@@ -1,9 +1,10 @@
 'use strict'
 const ethUtil = require('ethereumjs-util')
 const pkcs11js = require("pkcs11js");
+var keccak = require('keccak');
 const fees = require('ethereum-common/params.json')
 const BN = ethUtil.BN
-const retry_limit = 5;
+const retry_limit = 10;
 
 // secp256k1n/2
 const N_DIV_2 = new BN('7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0', 16)
@@ -306,6 +307,29 @@ class Transaction {
 
 
 
+  _getPublicKeyPKCS11 (pkcs11, session, key_label) {
+    //find key
+    pkcs11.C_FindObjectsInit(session, 
+      [
+        { type: pkcs11js.CKA_LABEL, value: key_label },
+        { type: pkcs11js.CKA_CLASS, value: pkcs11js.CKO_PUBLIC_KEY }
+      ]);
+
+    var publicKey = pkcs11.C_FindObjects(session);
+    pkcs11.C_FindObjectsFinal(session);
+    if (publicKey == null) {
+      //FIXME assert key found
+      throw "Key not found";
+    }
+
+    var ecpoint = pkcs11.C_GetAttributeValue(session, publicKey, [{type: pkcs11js.CKA_EC_POINT}]);
+    var ecdata = ecpoint[0].value;
+    var rawPublicKey = ecdata.slice(3,67);
+    var address = keccak('keccak256').update(rawPublicKey).digest().slice(12,32);
+
+    return {rawPublicKey: rawPublicKey, address:address}; 
+  }
+
   /**
    * get raw public key component via PKCS11 key handle
    * @param {String}  pkcsLibPath path to PKCS11 library SO file
@@ -315,6 +339,8 @@ class Transaction {
    */
   getPublicKeyPKCS11 (pkcsLibPath, pin, key_label, slotIndex = 0) {
     var pkcs11 = new pkcs11js.PKCS11();
+    var results;
+
     pkcs11.load(pkcsLibPath);     
     pkcs11.C_Initialize();
      
@@ -329,13 +355,8 @@ class Transaction {
         // Getting info about Session
         pkcs11.C_Login(session, pkcs11js.CKU_USER, pin);  //TODO hardcoded to user type
 
-        //find key
-        pkcs11.C_FindObjectsInit(session, 
-          [
-            { type: pkcs11js.CKA_LABEL, value: key_label },
-            { type: pkcs11js.CKA_CLASS, value: pkcs11js.CKO_PUBLIC_KEY }
-          ]);
-
+        results = this._getPublicKeyPKCS11 (pkcs11, session, key_label);
+        
         var publicKey = pkcs11.C_FindObjects(session);
         pkcs11.C_FindObjectsFinal(session);
         if (publicKey == null) {
@@ -356,10 +377,13 @@ class Transaction {
     }
     catch(e){
         console.error(e);
+        throw new Error("PKCS error");
     }
     finally {
         pkcs11.C_Finalize();
     }
+
+    return {rawPublicKey:results.rawPublicKey, address:results.address};
   }
 
   /**
@@ -386,6 +410,7 @@ class Transaction {
         // Login
         pkcs11.C_Login(session, pkcs11js.CKU_USER, pin);  //FIXME hardcoded to user type
 
+        var publicKeyRsl = this._getPublicKeyPKCS11 (pkcs11, session, key_label);
         //find key
         pkcs11.C_FindObjectsInit(session, [{ type: pkcs11js.CKA_LABEL, value: key_label }]);
 
@@ -408,11 +433,12 @@ class Transaction {
             sig.v += this._chainId * 2 + 8
           }
 
-          //recid is range from 0..3
+          //recid is range from 0..1
           //FIXME are we able to calculate this from public key only?
-          for(var recid=0; recid<4; recid++){
+          for(var recid=0; recid<2; recid++){
             Object.assign(this, sig);
-            if(this.verifySignature()) {
+//console.log("  this.v", this.v)
+            if(this.verifySignature() && (Buffer.compare(publicKeyRsl.rawPublicKey, this._senderPubKey)==0)) {
               sigVerified = true;
               break;
             }
