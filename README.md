@@ -18,7 +18,6 @@ This repo is forked from [ethereumjs-tx](https://github.com/ethereumjs/ethereumj
 
 ```javascript
 const EthereumTx = require('ethereumjs-tx')
-const privateKey = Buffer.from('e331b6d69882b4cb4ea581d88e0b604039a3de5967688d3dcffdd2270c0fd109', 'hex')
 
 const txParams = {
   nonce: '0x00',
